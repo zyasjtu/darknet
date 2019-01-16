@@ -1,0 +1,230 @@
+Wrong label: data/obj/A12478.txt - j = 0, x = 0.000000, y = 0.065666, width = 0.001250, height = 0.132270
+ loaded          image: 2755     box: 2755
+
+Wrong label: data/obj/A12479.txt - j = 0, x = 0.000000, y = 0.076923, width = 0.001250, height = 0.154784
+ loaded          image: 2757     box: 2757
+
+Wrong label: data/obj/A12480.txt - j = 0, x = 0.000000, y = 0.069887, width = 0.001250, height = 0.140713
+ loaded          image: 2758     box: 2758
+
+Wrong label: data/obj/A12481.txt - j = 0, x = 0.000000, y = 0.076454, width = 0.001250, height = 0.153846
+ loaded          image: 2759     box: 2759
+
+Wrong label: data/obj/A12482.txt - j = 0, x = 0.000000, y = 0.069887, width = 0.001250, height = 0.140713
+ loaded          image: 2760     box: 2760
+
+Wrong label: data/obj/A12483.txt - j = 0, x = 0.000000, y = 0.081144, width = 0.001250, height = 0.163227
+ loaded          image: 2761     box: 2761
+
+Wrong label: data/obj/A12484.txt - j = 0, x = 0.000000, y = 0.101782, width = 0.001250, height = 0.204503
+ loaded          image: 2762     box: 2762
+
+Wrong label: data/obj/A12485.txt - j = 0, x = 0.000000, y = 0.083021, width = 0.001250, height = 0.166979
+ loaded          image: 2763     box: 2763
+
+Wrong label: data/obj/A12486.txt - j = 0, x = 0.000000, y = 0.081144, width = 0.001250, height = 0.163227
+ loaded          image: 2764     box: 2764
+
+Wrong label: data/obj/A12487.txt - j = 0, x = 0.000000, y = 0.044090, width = 0.001250, height = 0.089118
+ loaded          image: 2765     box: 2765
+
+Wrong label: data/obj/A12488.txt - j = 0, x = 0.000000, y = 0.071764, width = 0.001250, height = 0.144465
+ loaded          image: 2766     box: 2766
+
+Wrong label: data/obj/A12489.txt - j = 0, x = 0.000000, y = 0.070357, width = 0.001250, height = 0.141651
+ loaded          image: 2768     box: 2768
+
+Wrong label: data/obj/A12490.txt - j = 0, x = 0.000000, y = 0.068011, width = 0.001250, height = 0.136961
+ loaded          image: 2769     box: 2769
+
+Wrong label: data/obj/A12491.txt - j = 0, x = 0.000000, y = 0.072233, width = 0.001250, height = 0.145403
+ loaded          image: 2770     box: 2770
+
+Wrong label: data/obj/A12492.txt - j = 0, x = 0.000000, y = 0.047842, width = 0.001250, height = 0.096623
+ loaded          image: 2771     box: 2771
+
+Wrong label: data/obj/A12493.txt - j = 0, x = 0.000000, y = 0.066135, width = 0.001250, height = 0.133208
+ loaded          image: 2772     box: 2772
+
+Wrong label: data/obj/A12494.txt - j = 0, x = 0.000000, y = 0.063790, width = 0.001250, height = 0.128518
+ loaded          image: 2773     box: 2773
+
+Wrong label: data/obj/A12495.txt - j = 0, x = 0.000000, y = 0.079268, width = 0.001250, height = 0.159475
+ loaded          image: 2774     box: 2774
+
+Wrong label: data/obj/A12496.txt - j = 0, x = 0.000000, y = 0.077392, width = 0.001250, height = 0.155722
+ loaded          image: 2775     box: 2775
+
+Wrong label: data/obj/A12497.txt - j = 0, x = 0.000000, y = 0.075047, width = 0.001250, height = 0.151032
+ loaded          image: 2776     box: 2776
+
+Wrong label: data/obj/A12498.txt - j = 0, x = 0.000000, y = 0.075047, width = 0.001250, height = 0.151032
+ loaded          image: 2777     box: 2777
+
+Wrong label: data/obj/A12499.txt - j = 0, x = 0.000000, y = 0.063790, width = 0.001250, height = 0.128518
+ loaded          image: 2780     box: 2780
+
+Wrong label: data/obj/A12500.txt - j = 0, x = 0.000000, y = 0.070357, width = 0.001250, height = 0.141651
+ loaded          image: 2781     box: 2781
+
+Wrong label: data/obj/A12501.txt - j = 0, x = 0.000000, y = 0.061445, width = 0.001250, height = 0.123827
+ loaded          image: 2782     box: 2782
+
+Wrong label: data/obj/A12502.txt - j = 0, x = 0.000000, y = 0.067542, width = 0.001250, height = 0.136023
+ loaded          image: 2783     box: 2783
+
+Wrong label: data/obj/A12503.txt - j = 0, x = 0.000000, y = 0.075516, width = 0.001250, height = 0.151970
+ loaded          image: 2784     box: 2784
+
+Wrong label: data/obj/A12504.txt - j = 0, x = 0.000000, y = 0.080206, width = 0.001250, height = 0.161351
+ loaded          image: 2785     box: 2785
+
+Wrong label: data/obj/A12505.txt - j = 0, x = 0.000000, y = 0.083959, width = 0.001250, height = 0.168856
+ loaded          image: 2786     box: 2786
+
+Wrong label: data/obj/A12506.txt - j = 0, x = 0.000000, y = 0.097092, width = 0.001250, height = 0.195122
+ loaded          image: 2787     box: 2787
+
+Wrong label: data/obj/A12507.txt - j = 0, x = 0.000000, y = 0.079268, width = 0.001250, height = 0.159475
+ loaded          image: 2788     box: 2788
+
+Wrong label: data/obj/A12508.txt - j = 0, x = 0.000000, y = 0.069887, width = 0.001250, height = 0.140713
+ loaded          image: 2789     box: 2789
+
+Wrong label: data/obj/A12509.txt - j = 0, x = 0.000000, y = 0.064728, width = 0.001250, height = 0.130394
+ loaded          image: 2791     box: 2791
+
+Wrong label: data/obj/A12510.txt - j = 0, x = 0.000000, y = 0.080206, width = 0.001250, height = 0.161351
+ loaded          image: 2792     box: 2792
+
+Wrong label: data/obj/A12511.txt - j = 0, x = 0.000000, y = 0.082552, width = 0.001250, height = 0.166041
+ loaded          image: 2793     box: 2793
+
+Wrong label: data/obj/A12512.txt - j = 0, x = 0.000000, y = 0.083021, width = 0.001250, height = 0.166979
+ loaded          image: 2794     box: 2794
+
+Wrong label: data/obj/A12513.txt - j = 0, x = 0.000000, y = 0.086304, width = 0.001250, height = 0.173546
+ loaded          image: 2795     box: 2795
+
+Wrong label: data/obj/A12514.txt - j = 0, x = 0.000000, y = 0.071295, width = 0.001250, height = 0.143527
+ loaded          image: 2796     box: 2796
+
+Wrong label: data/obj/A12515.txt - j = 0, x = 0.000000, y = 0.045028, width = 0.001250, height = 0.090994
+ loaded          image: 2797     box: 2797
+
+Wrong label: data/obj/A12516.txt - j = 0, x = 0.000000, y = 0.067542, width = 0.001250, height = 0.136023
+ loaded          image: 2798     box: 2798
+
+Wrong label: data/obj/A12517.txt - j = 0, x = 0.000000, y = 0.069418, width = 0.001250, height = 0.139775
+ loaded          image: 4328     box: 4366
+
+Wrong label: data/obj/A13896.txt - j = 0, x = 0.000000, y = 0.100000, width = 0.001667, height = 0.201250
+ loaded          image: 4329     box: 4367
+
+Wrong label: data/obj/A13897.txt - j = 0, x = 0.000000, y = 0.115625, width = 0.001667, height = 0.232500
+ loaded          image: 4330     box: 4368
+
+Wrong label: data/obj/A13898.txt - j = 0, x = 0.000000, y = 0.119375, width = 0.001667, height = 0.240000
+ loaded          image: 4331     box: 4369
+
+Wrong label: data/obj/A13899.txt - j = 0, x = 0.000000, y = 0.134375, width = 0.001667, height = 0.270000
+ loaded          image: 4334     box: 4372
+
+Wrong label: data/obj/A13900.txt - j = 0, x = 0.000000, y = 0.138750, width = 0.001667, height = 0.278750
+ loaded          image: 4335     box: 4373
+
+Wrong label: data/obj/A13901.txt - j = 0, x = 0.000000, y = 0.130625, width = 0.001667, height = 0.262500
+ loaded          image: 4336     box: 4374
+
+Wrong label: data/obj/A13902.txt - j = 0, x = 0.000000, y = 0.108125, width = 0.001667, height = 0.217500
+ loaded          image: 4337     box: 4375
+
+Wrong label: data/obj/A13903.txt - j = 0, x = 0.000000, y = 0.130625, width = 0.001667, height = 0.262500
+ loaded          image: 4338     box: 4376
+
+Wrong label: data/obj/A13904.txt - j = 0, x = 0.000000, y = 0.103125, width = 0.001667, height = 0.207500
+ loaded          image: 4339     box: 4377
+
+Wrong label: data/obj/A13905.txt - j = 0, x = 0.000000, y = 0.113125, width = 0.001667, height = 0.227500
+ loaded          image: 4340     box: 4378
+
+Wrong label: data/obj/A13906.txt - j = 0, x = 0.000000, y = 0.103125, width = 0.001667, height = 0.207500
+ loaded          image: 4341     box: 4379
+
+Wrong label: data/obj/A13907.txt - j = 0, x = 0.000000, y = 0.111875, width = 0.001667, height = 0.225000
+ loaded          image: 4342     box: 4380
+
+Wrong label: data/obj/A13908.txt - j = 0, x = 0.000000, y = 0.118125, width = 0.001667, height = 0.237500
+ loaded          image: 4343     box: 4381
+
+Wrong label: data/obj/A13909.txt - j = 0, x = 0.000000, y = 0.093125, width = 0.001667, height = 0.187500
+ loaded          image: 4345     box: 4383
+
+Wrong label: data/obj/A13910.txt - j = 0, x = 0.000000, y = 0.082500, width = 0.001667, height = 0.166250
+ loaded          image: 4346     box: 4384
+
+Wrong label: data/obj/A13911.txt - j = 0, x = 0.000000, y = 0.100625, width = 0.001667, height = 0.202500
+ loaded          image: 4347     box: 4385
+
+Wrong label: data/obj/A13912.txt - j = 0, x = 0.000000, y = 0.095000, width = 0.001667, height = 0.191250
+ loaded          image: 4348     box: 4386
+
+Wrong label: data/obj/A13913.txt - j = 0, x = 0.000000, y = 0.100625, width = 0.001667, height = 0.202500
+ loaded          image: 4349     box: 4387
+
+Wrong label: data/obj/A13914.txt - j = 0, x = 0.000000, y = 0.113750, width = 0.001667, height = 0.228750
+ loaded          image: 4350     box: 4388
+
+Wrong label: data/obj/A13915.txt - j = 0, x = 0.000000, y = 0.120625, width = 0.001667, height = 0.242500
+ loaded          image: 4351     box: 4389
+
+Wrong label: data/obj/A13916.txt - j = 0, x = 0.000000, y = 0.113750, width = 0.001667, height = 0.228750
+ loaded          image: 4352     box: 4390
+
+Wrong label: data/obj/A13917.txt - j = 0, x = 0.000000, y = 0.121875, width = 0.001667, height = 0.245000
+ loaded          image: 4353     box: 4391
+
+Wrong label: data/obj/A13918.txt - j = 0, x = 0.000000, y = 0.130000, width = 0.001667, height = 0.261250
+ loaded          image: 4354     box: 4392
+
+Wrong label: data/obj/A13919.txt - j = 0, x = 0.000000, y = 0.123125, width = 0.001667, height = 0.247500
+ loaded          image: 4356     box: 4394
+
+Wrong label: data/obj/A13920.txt - j = 0, x = 0.000000, y = 0.130625, width = 0.001667, height = 0.262500
+ loaded          image: 4357     box: 4395
+
+Wrong label: data/obj/A13921.txt - j = 0, x = 0.000000, y = 0.131875, width = 0.001667, height = 0.265000
+ loaded          image: 4358     box: 4396
+
+Wrong label: data/obj/A13922.txt - j = 0, x = 0.000000, y = 0.140625, width = 0.001667, height = 0.282500
+ loaded          image: 4359     box: 4397
+
+Wrong label: data/obj/A13923.txt - j = 0, x = 0.000000, y = 0.131875, width = 0.001667, height = 0.265000
+ loaded          image: 4360     box: 4398
+
+Wrong label: data/obj/A13924.txt - j = 0, x = 0.000000, y = 0.121875, width = 0.001667, height = 0.245000
+ loaded          image: 4361     box: 4399
+
+Wrong label: data/obj/A13925.txt - j = 0, x = 0.000000, y = 0.111875, width = 0.001667, height = 0.225000
+ loaded          image: 4362     box: 4400
+
+Wrong label: data/obj/A13926.txt - j = 0, x = 0.000000, y = 0.096250, width = 0.001667, height = 0.193750
+ loaded          image: 4363     box: 4401
+
+Wrong label: data/obj/A13927.txt - j = 0, x = 0.000000, y = 0.107500, width = 0.001667, height = 0.216250
+ loaded          image: 4364     box: 4402
+
+Wrong label: data/obj/A13928.txt - j = 0, x = 0.000000, y = 0.113125, width = 0.001667, height = 0.227500
+ loaded          image: 4365     box: 4403
+
+Wrong label: data/obj/A13929.txt - j = 0, x = 0.000000, y = 0.105625, width = 0.001667, height = 0.212500
+ loaded          image: 4367     box: 4405
+
+Wrong label: data/obj/A13930.txt - j = 0, x = 0.000000, y = 0.098750, width = 0.001667, height = 0.198750
+ loaded          image: 4368     box: 4406
+
+Wrong label: data/obj/A13931.txt - j = 0, x = 0.000000, y = 0.110000, width = 0.001667, height = 0.221250
+ loaded          image: 4369     box: 4407
+
+Wrong label: data/obj/A13932.txt - j = 0, x = 0.000000, y = 0.113125, width = 0.001667, height = 0.227500
+ loaded          image: 40879    box: 41018
