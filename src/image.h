@@ -7,8 +7,13 @@
 #include <float.h>
 #include <string.h>
 #include <math.h>
-#include "box.h"
 
+#include "image_opencv.h"
+
+#include "box.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
 /*
 typedef struct {
     int w;
@@ -33,6 +38,7 @@ image random_crop_image(image im, int w, int h);
 image random_augment_image(image im, float angle, float aspect, int low, int high, int size);
 void random_distort_image(image im, float hue, float saturation, float exposure);
 //LIB_API image resize_image(image im, int w, int h);
+//LIB_API void copy_image_from_bytes(image im, char *pdata);
 void fill_image(image m, float s);
 void letterbox_image_into(image im, int w, int h, image boxed);
 //LIB_API image letterbox_image(image im, int w, int h);
@@ -73,9 +79,11 @@ void print_image(image m);
 //LIB_API image make_image(int w, int h, int c);
 image make_random_image(int w, int h, int c);
 image make_empty_image(int w, int h, int c);
+image float_to_image_scaled(int w, int h, int c, float *data);
 image float_to_image(int w, int h, int c, float *data);
 image copy_image(image p);
 image load_image(char *filename, int w, int h, int c);
+image load_image_stb_resize(char *filename, int w, int h, int c);
 //LIB_API image load_image_color(char *filename, int w, int h);
 image **load_alphabet();
 
@@ -89,5 +97,8 @@ image get_image_layer(image m, int l);
 
 //LIB_API void free_image(image m);
 void test_resize(char *filename);
+#ifdef __cplusplus
+}
 #endif
 
+#endif

@@ -1,15 +1,27 @@
 #include "gemm.h"
 #include "utils.h"
 #include "im2col.h"
-#include "cuda.h"
+#include "dark_cuda.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 #include <float.h>
 #include <string.h>
-
+#include <stdint.h>
+#ifdef _WIN32
+#include <intrin.h>
+#endif
 #if defined(_OPENMP)
 #include <omp.h>
+#endif
+
+#define TILE_M 4 // 4 ops
+#define TILE_N 16 // AVX2 = 2 ops * 8 floats
+#define TILE_K 16 // loop
+#ifdef __cplusplus
+#define PUT_IN_REGISTER
+#else
+#define PUT_IN_REGISTER register
 #endif
 
 void gemm_bin(int M, int N, int K, float ALPHA,
@@ -37,7 +49,7 @@ void gemm_bin(int M, int N, int K, float ALPHA,
 float *random_matrix(int rows, int cols)
 {
     int i;
-    float *m = calloc(rows*cols, sizeof(float));
+    float* m = (float*)calloc(rows * cols, sizeof(float));
     for(i = 0; i < rows*cols; ++i){
         m[i] = (float)rand()/RAND_MAX;
     }
@@ -83,7 +95,6 @@ void gemm(int TA, int TB, int M, int N, int K, float ALPHA,
 // XNOR bitwise GEMM for binary neural network
 //--------------------------------------------
 
-#include <stdint.h>
 
 static inline unsigned char xnor(unsigned char a, unsigned char b) {
     //return a == b;
@@ -310,14 +321,15 @@ void gemm_nn_custom_bin_mean_transposed(int M, int N, int K, float ALPHA_UNUSED,
 // is not used
 void transpose_32x32_bits_my(uint32_t *A, uint32_t *B, int lda, int ldb)
 {
-    unsigned x, y, t;
+    unsigned int x, y;
     for (y = 0; y < 32; ++y) {
         for (x = 0; x < 32; ++x) {
-            if (A[y * lda] & (1 << x)) B[x * ldb] |= (uint32_t)1 << y;
+            if (A[y * lda] & ((uint32_t)1 << x)) B[x * ldb] |= (uint32_t)1 << y;
         }
     }
 }
 
+#ifndef GPU
 uint8_t reverse_8_bit(uint8_t a) {
     return ((a * 0x0802LU & 0x22110LU) | (a * 0x8020LU & 0x88440LU)) * 0x10101LU >> 16;
 }
@@ -388,7 +400,7 @@ void transpose_32x32_bits_reversed_diagonale(uint32_t *A, uint32_t *B, int m, in
 
 void transpose_8x8_bits_my(unsigned char *A, unsigned char *B, int lda, int ldb)
 {
-    unsigned x, y, t;
+    unsigned x, y;
     for (y = 0; y < 8; ++y) {
         for (x = 0; x < 8; ++x) {
             if (A[y * lda] & (1 << x)) B[x * ldb] |= 1 << y;
@@ -465,6 +477,7 @@ void transpose_bin(char *A, char *B, const int n, const int m,
 }
 */
 
+#endif
 
 // transpose by 32-bit
 void transpose_bin(uint32_t *A, uint32_t *B, const int n, const int m,
@@ -483,7 +496,7 @@ void transpose_bin(uint32_t *A, uint32_t *B, const int n, const int m,
             //transpose_32x32_bits_my(&A[a_index/32], &B[b_index/32], lda/32, ldb/32);
         }
         for (; j < m; ++j) {
-            if (get_bit(A, i*lda + j)) set_bit(B, j*ldb + i);
+            if (get_bit((const unsigned char* const)A, i * lda + j)) set_bit((unsigned char* const)B, j * ldb + i);
         }
     }
 }
@@ -499,7 +512,7 @@ static inline int popcnt_32(uint32_t val32) {
 //----------------------------
 
 
-#if (defined(__AVX__) && defined(__x86_64__)) || defined(_WIN64)
+#if (defined(__AVX__) && defined(__x86_64__)) || (defined(_WIN64) && !defined(__MINGW32__))
 
 #ifdef _WIN64
 #include <intrin.h>
@@ -537,7 +550,26 @@ static inline float _castu32_f32(uint32_t a) {
 }
 
 static inline float _mm256_extract_float32(__m256 a, const int index) {
-    return _castu32_f32(_mm256_extract_epi32(_mm256_castps_si256(a), index));
+    switch(index) {
+    case 0:
+      return _castu32_f32(_mm256_extract_epi32(_mm256_castps_si256(a), 0));
+    case 1:
+      return _castu32_f32(_mm256_extract_epi32(_mm256_castps_si256(a), 1));
+    case 2:
+      return _castu32_f32(_mm256_extract_epi32(_mm256_castps_si256(a), 2));
+    case 3:
+      return _castu32_f32(_mm256_extract_epi32(_mm256_castps_si256(a), 3));
+    case 4:
+      return _castu32_f32(_mm256_extract_epi32(_mm256_castps_si256(a), 4));
+    case 5:
+      return _castu32_f32(_mm256_extract_epi32(_mm256_castps_si256(a), 5));
+    case 6:
+      return _castu32_f32(_mm256_extract_epi32(_mm256_castps_si256(a), 6));
+    case 7:
+      return _castu32_f32(_mm256_extract_epi32(_mm256_castps_si256(a), 7));
+    default:
+      return _castu32_f32(_mm256_extract_epi32(_mm256_castps_si256(a), 0));
+    }
 }
 
 void asm_cpuid(uint32_t* abcd, uint32_t eax)
@@ -604,48 +636,48 @@ void check_cpu_features(void) {
     //  Detect Features
     if (nIds >= 0x00000001) {
         cpuid(info, 0x00000001);
-        HW_MMX = (info[3] & ((int)1 << 23)) != 0;
-        HW_SSE = (info[3] & ((int)1 << 25)) != 0;
-        HW_SSE2 = (info[3] & ((int)1 << 26)) != 0;
-        HW_SSE3 = (info[2] & ((int)1 << 0)) != 0;
+        HW_MMX = (info[3] & ((uint32_t)1 << 23)) != 0;
+        HW_SSE = (info[3] & ((uint32_t)1 << 25)) != 0;
+        HW_SSE2 = (info[3] & ((uint32_t)1 << 26)) != 0;
+        HW_SSE3 = (info[2] & ((uint32_t)1 << 0)) != 0;
 
-        HW_SSSE3 = (info[2] & ((int)1 << 9)) != 0;
-        HW_SSE41 = (info[2] & ((int)1 << 19)) != 0;
-        HW_SSE42 = (info[2] & ((int)1 << 20)) != 0;
-        HW_AES = (info[2] & ((int)1 << 25)) != 0;
+        HW_SSSE3 = (info[2] & ((uint32_t)1 << 9)) != 0;
+        HW_SSE41 = (info[2] & ((uint32_t)1 << 19)) != 0;
+        HW_SSE42 = (info[2] & ((uint32_t)1 << 20)) != 0;
+        HW_AES = (info[2] & ((uint32_t)1 << 25)) != 0;
 
-        HW_AVX = (info[2] & ((int)1 << 28)) != 0;
-        HW_FMA3 = (info[2] & ((int)1 << 12)) != 0;
+        HW_AVX = (info[2] & ((uint32_t)1 << 28)) != 0;
+        HW_FMA3 = (info[2] & ((uint32_t)1 << 12)) != 0;
 
-        HW_RDRAND = (info[2] & ((int)1 << 30)) != 0;
+        HW_RDRAND = (info[2] & ((uint32_t)1 << 30)) != 0;
     }
     if (nIds >= 0x00000007) {
         cpuid(info, 0x00000007);
-        HW_AVX2 = (info[1] & ((int)1 << 5)) != 0;
+        HW_AVX2 = (info[1] & ((uint32_t)1 << 5)) != 0;
 
-        HW_BMI1 = (info[1] & ((int)1 << 3)) != 0;
-        HW_BMI2 = (info[1] & ((int)1 << 8)) != 0;
-        HW_ADX = (info[1] & ((int)1 << 19)) != 0;
-        HW_SHA = (info[1] & ((int)1 << 29)) != 0;
-        HW_PREFETCHWT1 = (info[2] & ((int)1 << 0)) != 0;
+        HW_BMI1 = (info[1] & ((uint32_t)1 << 3)) != 0;
+        HW_BMI2 = (info[1] & ((uint32_t)1 << 8)) != 0;
+        HW_ADX = (info[1] & ((uint32_t)1 << 19)) != 0;
+        HW_SHA = (info[1] & ((uint32_t)1 << 29)) != 0;
+        HW_PREFETCHWT1 = (info[2] & ((uint32_t)1 << 0)) != 0;
 
-        HW_AVX512F = (info[1] & ((int)1 << 16)) != 0;
-        HW_AVX512CD = (info[1] & ((int)1 << 28)) != 0;
-        HW_AVX512PF = (info[1] & ((int)1 << 26)) != 0;
-        HW_AVX512ER = (info[1] & ((int)1 << 27)) != 0;
-        HW_AVX512VL = (info[1] & ((int)1 << 31)) != 0;
-        HW_AVX512BW = (info[1] & ((int)1 << 30)) != 0;
-        HW_AVX512DQ = (info[1] & ((int)1 << 17)) != 0;
-        HW_AVX512IFMA = (info[1] & ((int)1 << 21)) != 0;
-        HW_AVX512VBMI = (info[2] & ((int)1 << 1)) != 0;
+        HW_AVX512F = (info[1] & ((uint32_t)1 << 16)) != 0;
+        HW_AVX512CD = (info[1] & ((uint32_t)1 << 28)) != 0;
+        HW_AVX512PF = (info[1] & ((uint32_t)1 << 26)) != 0;
+        HW_AVX512ER = (info[1] & ((uint32_t)1 << 27)) != 0;
+        HW_AVX512VL = (info[1] & ((uint32_t)1 << 31)) != 0;
+        HW_AVX512BW = (info[1] & ((uint32_t)1 << 30)) != 0;
+        HW_AVX512DQ = (info[1] & ((uint32_t)1 << 17)) != 0;
+        HW_AVX512IFMA = (info[1] & ((uint32_t)1 << 21)) != 0;
+        HW_AVX512VBMI = (info[2] & ((uint32_t)1 << 1)) != 0;
     }
     if (nExIds >= 0x80000001) {
         cpuid(info, 0x80000001);
-        HW_x64 = (info[3] & ((int)1 << 29)) != 0;
-        HW_ABM = (info[2] & ((int)1 << 5)) != 0;
-        HW_SSE4a = (info[2] & ((int)1 << 6)) != 0;
-        HW_FMA4 = (info[2] & ((int)1 << 16)) != 0;
-        HW_XOP = (info[2] & ((int)1 << 11)) != 0;
+        HW_x64 = (info[3] & ((uint32_t)1 << 29)) != 0;
+        HW_ABM = (info[2] & ((uint32_t)1 << 5)) != 0;
+        HW_SSE4a = (info[2] & ((uint32_t)1 << 6)) != 0;
+        HW_FMA4 = (info[2] & ((uint32_t)1 << 16)) != 0;
+        HW_XOP = (info[2] & ((uint32_t)1 << 11)) != 0;
     }
 }
 
@@ -703,7 +735,7 @@ void gemm_nn(int M, int N, int K, float ALPHA,
     else {
         for (i = 0; i < M; ++i) {
             for (k = 0; k < K; ++k) {
-                register float A_PART = ALPHA*A[i*lda + k];
+                PUT_IN_REGISTER float A_PART = ALPHA * A[i * lda + k];
                 for (j = 0; j < N; ++j) {
                     C[i*ldc + j] += A_PART*B[k*ldb + j];
                 }
@@ -731,6 +763,141 @@ void gemm_nn(int M, int N, int K, float ALPHA,
 
 
 
+void gemm_nn_fast(int M, int N, int K, float ALPHA,
+    float *A, int lda,
+    float *B, int ldb,
+    float *C, int ldc)
+{
+    int i;
+
+    #pragma omp parallel for
+    for (i = 0; i < (M / TILE_M)*TILE_M; i += TILE_M)
+    {
+        int j, k;
+        int i_d, k_d;
+
+        for (k = 0; k < (K / TILE_K)*TILE_K; k += TILE_K)
+        {
+            for (j = 0; j < (N / TILE_N)*TILE_N; j += TILE_N)
+            {
+                // L1 - 6 bits tag [11:6] - cache size 32 KB, conflict for each 4 KB
+                // L2 - 9 bits tag [14:6] - cache size 256 KB, conflict for each 32 KB
+                // L3 - 13 bits tag [18:6] - cache size 8 MB, conflict for each 512 KB
+
+                __m256 result256;
+                __m256 a256_0, b256_0;    // AVX
+                __m256 a256_1, b256_1;    // AVX
+                __m256 a256_2;// , b256_2;    // AVX
+                __m256 a256_3;// , b256_3;    // AVX
+                __m256 c256_0, c256_1, c256_2, c256_3;
+                __m256 c256_4, c256_5, c256_6, c256_7;
+
+                c256_0 = _mm256_loadu_ps(&C[(0 + i)*ldc + (0 + j)]);
+                c256_1 = _mm256_loadu_ps(&C[(1 + i)*ldc + (0 + j)]);
+                c256_2 = _mm256_loadu_ps(&C[(0 + i)*ldc + (8 + j)]);
+                c256_3 = _mm256_loadu_ps(&C[(1 + i)*ldc + (8 + j)]);
+
+                c256_4 = _mm256_loadu_ps(&C[(2 + i)*ldc + (0 + j)]);
+                c256_5 = _mm256_loadu_ps(&C[(3 + i)*ldc + (0 + j)]);
+                c256_6 = _mm256_loadu_ps(&C[(2 + i)*ldc + (8 + j)]);
+                c256_7 = _mm256_loadu_ps(&C[(3 + i)*ldc + (8 + j)]);
+
+
+                for (k_d = 0; k_d < (TILE_K); ++k_d)
+                {
+                    a256_0 = _mm256_set1_ps(ALPHA*A[(0 + i)*lda + (k_d + k)]);
+                    a256_1 = _mm256_set1_ps(ALPHA*A[(1 + i)*lda + (k_d + k)]);
+
+                    a256_2 = _mm256_set1_ps(ALPHA*A[(2 + i)*lda + (k_d + k)]);
+                    a256_3 = _mm256_set1_ps(ALPHA*A[(3 + i)*lda + (k_d + k)]);
+
+
+                    b256_0 = _mm256_loadu_ps(&B[(k_d + k)*ldb + (0 + j)]);
+                    b256_1 = _mm256_loadu_ps(&B[(k_d + k)*ldb + (8 + j)]);
+
+                    // FMA - Intel Haswell (2013), AMD Piledriver (2012)
+                    //c256_0 = _mm256_fmadd_ps(a256_0, b256_0, c256_0);
+                    //c256_1 = _mm256_fmadd_ps(a256_1, b256_0, c256_1);
+                    //c256_2 = _mm256_fmadd_ps(a256_0, b256_1, c256_2);
+                    //c256_3 = _mm256_fmadd_ps(a256_1, b256_1, c256_3);
+
+                    //c256_4 = _mm256_fmadd_ps(a256_2, b256_0, c256_4);
+                    //c256_5 = _mm256_fmadd_ps(a256_3, b256_0, c256_5);
+                    //c256_6 = _mm256_fmadd_ps(a256_2, b256_1, c256_6);
+                    //c256_7 = _mm256_fmadd_ps(a256_3, b256_1, c256_7);
+
+                    result256 = _mm256_mul_ps(a256_0, b256_0);
+                    c256_0 = _mm256_add_ps(result256, c256_0);
+
+                    result256 = _mm256_mul_ps(a256_1, b256_0);
+                    c256_1 = _mm256_add_ps(result256, c256_1);
+
+                    result256 = _mm256_mul_ps(a256_0, b256_1);
+                    c256_2 = _mm256_add_ps(result256, c256_2);
+
+                    result256 = _mm256_mul_ps(a256_1, b256_1);
+                    c256_3 = _mm256_add_ps(result256, c256_3);
+
+
+                    result256 = _mm256_mul_ps(a256_2, b256_0);
+                    c256_4 = _mm256_add_ps(result256, c256_4);
+
+                    result256 = _mm256_mul_ps(a256_3, b256_0);
+                    c256_5 = _mm256_add_ps(result256, c256_5);
+
+                    result256 = _mm256_mul_ps(a256_2, b256_1);
+                    c256_6 = _mm256_add_ps(result256, c256_6);
+
+                    result256 = _mm256_mul_ps(a256_3, b256_1);
+                    c256_7 = _mm256_add_ps(result256, c256_7);
+                }
+                _mm256_storeu_ps(&C[(0 + i)*ldc + (0 + j)], c256_0);
+                _mm256_storeu_ps(&C[(1 + i)*ldc + (0 + j)], c256_1);
+                _mm256_storeu_ps(&C[(0 + i)*ldc + (8 + j)], c256_2);
+                _mm256_storeu_ps(&C[(1 + i)*ldc + (8 + j)], c256_3);
+
+                _mm256_storeu_ps(&C[(2 + i)*ldc + (0 + j)], c256_4);
+                _mm256_storeu_ps(&C[(3 + i)*ldc + (0 + j)], c256_5);
+                _mm256_storeu_ps(&C[(2 + i)*ldc + (8 + j)], c256_6);
+                _mm256_storeu_ps(&C[(3 + i)*ldc + (8 + j)], c256_7);
+            }
+
+            for (j = (N / TILE_N)*TILE_N; j < N; ++j) {
+                for (i_d = i; i_d < (i + TILE_M); ++i_d)
+                {
+                    for (k_d = k; k_d < (k + TILE_K); ++k_d)
+                    {
+                        PUT_IN_REGISTER float A_PART = ALPHA*A[i_d*lda + k_d];
+                        C[i_d*ldc + j] += A_PART*B[k_d*ldb + j];
+                    }
+                }
+            }
+        }
+
+        for (k = (K / TILE_K)*TILE_K; k < K; ++k)
+        {
+            for (i_d = i; i_d < (i + TILE_M); ++i_d)
+            {
+                PUT_IN_REGISTER float A_PART = ALPHA*A[i_d*lda + k];
+                for (j = 0; j < N; ++j) {
+                    C[i_d*ldc + j] += A_PART*B[k*ldb + j];
+                }
+            }
+        }
+    }
+
+    for (i = (M / TILE_M)*TILE_M; i < M; ++i) {
+        int j, k;
+        for (k = 0; k < K; ++k) {
+            PUT_IN_REGISTER float A_PART = ALPHA*A[i*lda + k];
+            for (j = 0; j < N; ++j) {
+                C[i*ldc + j] += A_PART*B[k*ldb + j];
+            }
+        }
+    }
+}
+
+
 
 void gemm_nn_bin_32bit_packed(int M, int N, int K, float ALPHA,
     uint32_t *A, int lda,
@@ -745,14 +912,14 @@ void gemm_nn_bin_32bit_packed(int M, int N, int K, float ALPHA,
         //printf(" l.mean_arr[i] = %d \n ", l.mean_arr[i]);
         for (s = 0; s < K; ++s) // l.size*l.size*l.c/32  or (l.size*l.size*l.c)
         {
-            register uint32_t A_PART = A[i*lda + s];
+            PUT_IN_REGISTER uint32_t A_PART = A[i*lda + s];
             __m256i a256 = _mm256_set1_epi32(A_PART);
 
             for (j = 0; j < N - 8; j += 8)
             {
                 __m256i b256 = *((__m256i*)&B[s*ldb + j]);
                 __m256i xor256 = _mm256_xor_si256(a256, b256);  // xnor = xor(a,b)
-                __m256i all_1 = _mm256_set1_epi8(255);
+                __m256i all_1 = _mm256_set1_epi8((char)255);
                 __m256i xnor256 = _mm256_andnot_si256(xor256, all_1); // xnor = not(xor(a,b))
 
                 // waiting for - CPUID Flags: AVX512VPOPCNTDQ: __m512i _mm512_popcnt_epi32(__m512i a)
@@ -782,7 +949,7 @@ void gemm_nn_bin_32bit_packed(int M, int N, int K, float ALPHA,
 
             for (; j < N; ++j) // out_h*out_w;
             {
-                register uint32_t B_PART = B[s*ldb + j];
+                PUT_IN_REGISTER uint32_t B_PART = B[s*ldb + j];
                 uint32_t xnor_result = ~(A_PART ^ B_PART);
                 int32_t count = popcnt_32(xnor_result);  // must be Signed int
 
@@ -795,8 +962,8 @@ void gemm_nn_bin_32bit_packed(int M, int N, int K, float ALPHA,
 void convolution_2d_old(int w, int h, int ksize, int n, int c, int pad, int stride,
     float *weights, float *input, float *output)
 {
-    const int out_h = (h + 2 * pad - ksize) / stride + 1;    // output_height=input_height for stride=1 and pad=1
-    const int out_w = (w + 2 * pad - ksize) / stride + 1;    // output_width=input_width for stride=1 and pad=1
+    //const int out_h = (h + 2 * pad - ksize) / stride + 1;    // output_height=input_height for stride=1 and pad=1
+    //const int out_w = (w + 2 * pad - ksize) / stride + 1;    // output_width=input_width for stride=1 and pad=1
 
     int fil;
     // filter index
@@ -843,8 +1010,8 @@ void convolution_2d_old(int w, int h, int ksize, int n, int c, int pad, int stri
 void convolution_2d(int w, int h, int ksize, int n, int c, int pad, int stride,
     float *weights, float *input, float *output, float *mean)
 {
-    const int out_h = (h + 2 * pad - ksize) / stride + 1;    // output_height=input_height for stride=1 and pad=1
-    const int out_w = (w + 2 * pad - ksize) / stride + 1;    // output_width=input_width for stride=1 and pad=1
+    //const int out_h = (h + 2 * pad - ksize) / stride + 1;    // output_height=input_height for stride=1 and pad=1
+    //const int out_w = (w + 2 * pad - ksize) / stride + 1;    // output_width=input_width for stride=1 and pad=1
     int i;
 
 #if defined(_OPENMP)
@@ -972,8 +1139,10 @@ void convolution_2d(int w, int h, int ksize, int n, int c, int pad, int stride,
 
 static inline int popcnt128(__m128i n) {
     const __m128i n_hi = _mm_unpackhi_epi64(n, n);
-#ifdef _MSC_VER
+#if defined(_MSC_VER)
     return __popcnt64(_mm_cvtsi128_si64(n)) + __popcnt64(_mm_cvtsi128_si64(n_hi));
+#elif defined(__APPLE__) && defined(__clang__)
+    return _mm_popcnt_u64(_mm_cvtsi128_si64(n)) + _mm_popcnt_u64(_mm_cvtsi128_si64(n_hi));
 #else
     return __popcntq(_mm_cvtsi128_si64(n)) + __popcntq(_mm_cvtsi128_si64(n_hi));
 #endif
@@ -1013,6 +1182,23 @@ static inline int popcnt256_custom(__m256i n) {
         + _mm256_extract_epi64(val, 3);
 }
 
+static inline void xnor_avx2_popcnt(__m256i a_bit256, __m256i b_bit256, __m256i *count_sum) {
+    __m256i c_bit256 = _mm256_set1_epi8((char)255);
+
+    __m256i xor256 = _mm256_xor_si256(a_bit256, b_bit256);  // xnor = not(xor(a,b))
+    c_bit256 = _mm256_andnot_si256(xor256, c_bit256);  // can be optimized - we can do other NOT for wegihts once and do not do this NOT
+
+    *count_sum = _mm256_add_epi64(count256(c_bit256), *count_sum);    //  1st part - popcnt Mula's algorithm
+}
+
+// 2nd part - popcnt Mula's algorithm
+static inline int get_count_mula(__m256i count_sum) {
+    return _mm256_extract_epi64(count_sum, 0)
+        + _mm256_extract_epi64(count_sum, 1)
+        + _mm256_extract_epi64(count_sum, 2)
+        + _mm256_extract_epi64(count_sum, 3);
+}
+
 // 5x times faster than gemm()-float32
 // further optimizations: do mean-mult only for the last layer
 void gemm_nn_custom_bin_mean_transposed(int M, int N, int K, float ALPHA_UNUSED,
@@ -1030,61 +1216,108 @@ void gemm_nn_custom_bin_mean_transposed(int M, int N, int K, float ALPHA_UNUSED,
     }
 #endif
 
+    //#pragma omp parallel for
+    //for (i = 0; i < M; ++i)
     #pragma omp parallel for
-    for (i = 0; i < M; ++i)
+    for (i = 0; i < (M/2)*2; i += 2)
     {   // l.n - filters [16 - 55 - 1024]
-        float mean_val = mean_arr[i];
+        float mean_val_0 = mean_arr[i + 0];
+        float mean_val_1 = mean_arr[i + 1];
         int j, k;
-        __m256i all_1 = _mm256_set1_epi8(255);
+        //__m256i all_1 = _mm256_set1_epi8(255);
 
-        for (j = 0; j < N; ++j) { // out_h*out_w - one channel output size [169 - 173056]
-            int count = 0;
+        //for (j = 0; j < N; ++j)
+        for (j = 0; j < (N/2)*2; j += 2)
+        { // out_h*out_w - one channel output size [169 - 173056]
+            //int count = 0;
             const int bit_step = 256;
-            __m256i count_sum = _mm256_set1_epi8(0);
+            __m256i count_sum_0 = _mm256_set1_epi8(0);
+            __m256i count_sum_1 = _mm256_set1_epi8(0);
+            __m256i count_sum_2 = _mm256_set1_epi8(0);
+            __m256i count_sum_3 = _mm256_set1_epi8(0);
 
             for (k = 0; k < K; k += bit_step) {   // l.size*l.size*l.c - one filter size [27 - 9216]
-                __m256i a_bit256 = _mm256_loadu_si256((__m256i *)(A + (i*lda + k) / 8));
-                __m256i b_bit256 = _mm256_loadu_si256((__m256i *)(B + (j*ldb + k) / 8));
-                __m256i xor256 = _mm256_xor_si256(a_bit256, b_bit256);  // xnor = not(xor(a,b))
-                __m256i c_bit256 = _mm256_andnot_si256(xor256, all_1);  // can be optimized - we can do other NOT for wegihts once and do not do this NOT
 
-                count_sum = _mm256_add_epi64(count256(c_bit256), count_sum);    //  Mula’s algorithm
+                __m256i a_bit256_0 = _mm256_loadu_si256((__m256i *)(A + ((i + 0)*lda + k) / 8));
+                __m256i b_bit256_0 = _mm256_loadu_si256((__m256i *)(B + ((j + 0)*ldb + k) / 8));
+
+                __m256i a_bit256_1 = _mm256_loadu_si256((__m256i *)(A + ((i + 1)*lda + k) / 8));
+                __m256i b_bit256_1 = _mm256_loadu_si256((__m256i *)(B + ((j + 1)*ldb + k) / 8));
+
+
+                xnor_avx2_popcnt(a_bit256_0, b_bit256_0, &count_sum_0);
+                xnor_avx2_popcnt(a_bit256_0, b_bit256_1, &count_sum_1);
+
+                xnor_avx2_popcnt(a_bit256_1, b_bit256_0, &count_sum_2);
+                xnor_avx2_popcnt(a_bit256_1, b_bit256_1, &count_sum_3);
 
                 //count += popcnt256(c_bit256);
-
                 //binary_int64_printf(c_bit64);
                 //printf(", count = %d \n\n", tmp_count);
             }
 
-            // count of 1 bits
-            //count = count_sum.m256i_i64[0] +
-            //    count_sum.m256i_i64[1] +
-            //    count_sum.m256i_i64[2] +
-             //   count_sum.m256i_i64[3];
-            count = _mm256_extract_epi64(count_sum, 0)
-                + _mm256_extract_epi64(count_sum, 1)
-                + _mm256_extract_epi64(count_sum, 2)
-                + _mm256_extract_epi64(count_sum, 3);
+            int count_0 = get_count_mula(count_sum_0);
+            int count_1 = get_count_mula(count_sum_1);
+            int count_2 = get_count_mula(count_sum_2);
+            int count_3 = get_count_mula(count_sum_3);
 
-            int f1 = (K % bit_step == 0) ? 0 : (bit_step - (K % bit_step));
+            const int f1 = (K % bit_step == 0) ? 0 : (bit_step - (K % bit_step));
+            count_0 = count_0 - f1;    // remove extra bits (from empty space for align only)
+            count_1 = count_1 - f1;
+            count_2 = count_2 - f1;
+            count_3 = count_3 - f1;
+            C[i*ldc + (j + 0)] = (2 * count_0 - K) * mean_val_0;
+            C[i*ldc + (j + 1)] = (2 * count_1 - K) * mean_val_0;
+            C[(i + 1)*ldc + (j + 0)] = (2 * count_2 - K) * mean_val_1;
+            C[(i + 1)*ldc + (j + 1)] = (2 * count_3 - K) * mean_val_1;
+        }
+
+        int i_d;
+        for (i_d = 0; i_d < 2; ++i_d)
+        {
+            float mean_val = mean_arr[i + i_d];
+            for (j = (N / 2) * 2; j < N; j += 1)
+            { // out_h*out_w - one channel output size [169 - 173056]
+                const int bit_step = 256;
+                __m256i count_sum = _mm256_set1_epi8(0);
+
+                for (k = 0; k < K; k += bit_step) {   // l.size*l.size*l.c - one filter size [27 - 9216]
+                    __m256i a_bit256_0 = _mm256_loadu_si256((__m256i *)(A + ((i + i_d + 0)*lda + k) / 8));
+                    __m256i b_bit256_0 = _mm256_loadu_si256((__m256i *)(B + ((j + 0)*ldb + k) / 8));
+                    xnor_avx2_popcnt(a_bit256_0, b_bit256_0, &count_sum);
+                }
+                int count = get_count_mula(count_sum);
+                const int f1 = (K % bit_step == 0) ? 0 : (bit_step - (K % bit_step));
+                count = count - f1;    // remove extra bits (from empty space for align only)
+                C[(i + i_d)*ldc + j] = (2 * count - K) * mean_val;
+            }
+        }
+    }
+
+    for (i = (M / 2) * 2; i < M; i += 1)
+    {
+        float mean_val = mean_arr[i];
+        int j, k;
+        for (j = 0; j < N; j += 1)
+        { // out_h*out_w - one channel output size [169 - 173056]
+            const int bit_step = 256;
+            __m256i count_sum = _mm256_set1_epi8(0);
+
+            for (k = 0; k < K; k += bit_step) {   // l.size*l.size*l.c - one filter size [27 - 9216]
+                __m256i a_bit256_0 = _mm256_loadu_si256((__m256i *)(A + ((i + 0)*lda + k) / 8));
+                __m256i b_bit256_0 = _mm256_loadu_si256((__m256i *)(B + ((j + 0)*ldb + k) / 8));
+                xnor_avx2_popcnt(a_bit256_0, b_bit256_0, &count_sum);
+            }
+            int count = get_count_mula(count_sum);
+            const int f1 = (K % bit_step == 0) ? 0 : (bit_step - (K % bit_step));
             count = count - f1;    // remove extra bits (from empty space for align only)
-
             C[i*ldc + j] = (2 * count - K) * mean_val;
         }
     }
 }
 
 
-static inline float im2col_get_pixel(float *im, int height, int width, int channels,
-    int row, int col, int channel, int pad)
-{
-    row -= pad;
-    col -= pad;
 
-    if (row < 0 || col < 0 ||
-        row >= height || col >= width) return 0;
-    return im[col + width*(row + height*channel)];
-}
 
 //From Berkeley Vision's Caffe!
 //https://github.com/BVLC/caffe/blob/master/LICENSE
@@ -1434,7 +1667,7 @@ void im2col_cpu_custom_bin(float* data_im,
                     __m256 result256 = _mm256_cmp_ps(src256, float_zero256, _CMP_GT_OS);
                     uint16_t mask = _mm256_movemask_ps(result256); // (val > 0) ? 0 : 1
 
-                    uint16_t *dst_ptr = &((unsigned char*)data_col)[col_index / 8];
+                    uint16_t* dst_ptr = (uint16_t*)&((uint8_t*)data_col)[col_index / 8];
                     *dst_ptr |= (mask << (col_index % 8));
                 }
 
@@ -1446,7 +1679,7 @@ void im2col_cpu_custom_bin(float* data_im,
 
                     //data_col[col_index] = data_im[im_col + width*(im_row + height*c_im)];
                     float val = data_im[im_col + width*(im_row + height*c_im)];
-                    if(val > 0) set_bit(data_col, col_index);
+                    if (val > 0) set_bit((unsigned char* const)data_col, col_index);
                 }
             }
 
@@ -1460,7 +1693,7 @@ void im2col_cpu_custom_bin(float* data_im,
 
                     //data_col[col_index] = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
                     float val = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
-                    if (val > 0) set_bit(data_col, col_index);
+                    if (val > 0) set_bit((unsigned char* const)data_col, col_index);
                 }
             }
 
@@ -1474,7 +1707,7 @@ void im2col_cpu_custom_bin(float* data_im,
 
                     //data_col[col_index] = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
                     float val = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
-                    if (val > 0) set_bit(data_col, col_index);
+                    if (val > 0) set_bit((unsigned char* const)data_col, col_index);
                 }
             }
 
@@ -1488,7 +1721,7 @@ void im2col_cpu_custom_bin(float* data_im,
 
                     //data_col[col_index] = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
                     float val = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
-                    if (val > 0) set_bit(data_col, col_index);
+                    if (val > 0) set_bit((unsigned char* const)data_col, col_index);
                 }
             }
 
@@ -1502,7 +1735,7 @@ void im2col_cpu_custom_bin(float* data_im,
 
                     //data_col[col_index] = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
                     float val = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
-                    if (val > 0) set_bit(data_col, col_index);
+                    if (val > 0) set_bit((unsigned char* const)data_col, col_index);
                 }
             }
         }
@@ -1558,7 +1791,7 @@ void float_to_bit(float *src, unsigned char *dst, size_t size)
     memset(dst, 0, dst_size);
 
     size_t i;
-    __m256i all256_sing1 = _mm256_set_epi32(0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000);
+    //__m256i all256_sing1 = _mm256_set_epi32(0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000, 0x80000000);
     __m256 float_zero256 = _mm256_set1_ps(0.0);
 
     for (i = 0; i < size; i+=8)
@@ -1669,8 +1902,8 @@ void forward_maxpool_layer_avx(float *src, float *dst, int *indexes, int size, i
                 else if (size == 2 && stride == 2 && is_avx() == 1) {
                     for (j = 0; j < out_w - 4; j += 4) {
                         int out_index = j + out_w*(i + out_h*(k + c*b));
-                        float max = -FLT_MAX;
-                        int max_i = -1;
+                        //float max = -FLT_MAX;
+                        //int max_i = -1;
                         __m128 max128 = _mm_set1_ps(-FLT_MAX);
 
                         for (n = 0; n < size; ++n) {
@@ -1716,7 +1949,7 @@ void forward_maxpool_layer_avx(float *src, float *dst, int *indexes, int size, i
                         }
                     }
                     dst[out_index] = max;
-                    indexes[out_index] = max_i;
+                    if (indexes) indexes[out_index] = max_i;
                 }
             }
         }
@@ -1741,7 +1974,24 @@ void gemm_nn(int M, int N, int K, float ALPHA,
     int i, j, k;
     for (i = 0; i < M; ++i) {
         for (k = 0; k < K; ++k) {
-            register float A_PART = ALPHA*A[i*lda + k];
+            PUT_IN_REGISTER float A_PART = ALPHA * A[i * lda + k];
+            for (j = 0; j < N; ++j) {
+                C[i*ldc + j] += A_PART*B[k*ldb + j];
+            }
+        }
+    }
+}
+
+void gemm_nn_fast(int M, int N, int K, float ALPHA,
+    float *A, int lda,
+    float *B, int ldb,
+    float *C, int ldc)
+{
+    int i, j, k;
+    #pragma omp parallel for
+    for (i = 0; i < M; ++i) {
+        for (k = 0; k < K; ++k) {
+            PUT_IN_REGISTER float A_PART = ALPHA*A[i*lda + k];
             for (j = 0; j < N; ++j) {
                 C[i*ldc + j] += A_PART*B[k*ldb + j];
             }
@@ -1762,12 +2012,12 @@ void gemm_nn_bin_32bit_packed(int M, int N, int K, float ALPHA,
         //printf(" l.mean_arr[i] = %d \n ", l.mean_arr[i]);
         for (s = 0; s < K; ++s) // l.size*l.size*l.c/32  or (l.size*l.size*l.c)
         {
-            //register float A_PART = 1*a[i*k + s];
-            register uint32_t A_PART = A[i*lda + s];
+            //PUT_IN_REGISTER float A_PART = 1*a[i*k + s];
+            PUT_IN_REGISTER uint32_t A_PART = A[i * lda + s];
             for (j = 0; j < N; ++j) // out_h*out_w;
             {
                 //c[i*n + j] += A_PART*b[s*n + j];
-                register uint32_t B_PART = B[s*ldb + j];
+                PUT_IN_REGISTER uint32_t B_PART = B[s * ldb + j];
                 uint32_t xnor_result = ~(A_PART ^ B_PART);
                 //printf(" xnor_result = %d, ", xnor_result);
                 int32_t count = popcnt_32(xnor_result);  // must be Signed int
@@ -1837,11 +2087,11 @@ static inline int popcnt_64(uint64_t val64) {
     tmp_count += __popcnt(val64 >> 32);
 #endif
 #else   // Linux
-#ifdef __x86_64__  // Linux 64-bit
+#if defined(__x86_64__) || defined(__aarch64__)  // Linux 64-bit
     int tmp_count = __builtin_popcountll(val64);
 #else  // Linux 32-bit
     int tmp_count = __builtin_popcount(val64);
-    tmp_count += __builtin_popcount(val64);
+    tmp_count += __builtin_popcount(val64 >> 32);
 #endif
 #endif
     return tmp_count;
@@ -2011,7 +2261,7 @@ void im2col_cpu_custom_bin(float* data_im,
                     int col_index = c * new_ldb + h * width_col + w;
 
                     float val = data_im[im_col + width*(im_row + height*c_im)];
-                    if (val > 0) set_bit(data_col, col_index);
+                    if (val > 0) set_bit((unsigned char*)data_col, col_index);
                 }
 
                 for (; w < width_col - pad; ++w) {
@@ -2022,7 +2272,7 @@ void im2col_cpu_custom_bin(float* data_im,
 
                     //data_col[col_index] = data_im[im_col + width*(im_row + height*c_im)];
                     float val = data_im[im_col + width*(im_row + height*c_im)];
-                    if (val > 0) set_bit(data_col, col_index);
+                    if (val > 0) set_bit((unsigned char*)data_col, col_index);
                 }
             }
 
@@ -2036,7 +2286,7 @@ void im2col_cpu_custom_bin(float* data_im,
 
                     //data_col[col_index] = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
                     float val = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
-                    if (val > 0) set_bit(data_col, col_index);
+                    if (val > 0) set_bit((unsigned char*)data_col, col_index);
                 }
             }
 
@@ -2050,7 +2300,7 @@ void im2col_cpu_custom_bin(float* data_im,
 
                     //data_col[col_index] = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
                     float val = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
-                    if (val > 0) set_bit(data_col, col_index);
+                    if (val > 0) set_bit((unsigned char*)data_col, col_index);
                 }
             }
 
@@ -2064,7 +2314,7 @@ void im2col_cpu_custom_bin(float* data_im,
 
                     //data_col[col_index] = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
                     float val = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
-                    if (val > 0) set_bit(data_col, col_index);
+                    if (val > 0) set_bit((unsigned char*)data_col, col_index);
                 }
             }
 
@@ -2078,7 +2328,7 @@ void im2col_cpu_custom_bin(float* data_im,
 
                     //data_col[col_index] = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
                     float val = im2col_get_pixel(data_im, height, width, channels, im_row, im_col, c_im, pad);
-                    if (val > 0) set_bit(data_col, col_index);
+                    if (val > 0) set_bit((unsigned char*)data_col, col_index);
                 }
             }
         }
@@ -2118,7 +2368,7 @@ void float_to_bit(float *src, unsigned char *dst, size_t size)
     memset(dst, 0, dst_size);
 
     size_t i;
-    char *byte_arr = calloc(size, sizeof(char));
+    char* byte_arr = (char*)calloc(size, sizeof(char));
     for (i = 0; i < size; ++i) {
         if (src[i] > 0) byte_arr[i] = 1;
     }
@@ -2202,7 +2452,7 @@ void forward_maxpool_layer_avx(float *src, float *dst, int *indexes, int size, i
                         }
                     }
                     dst[out_index] = max;
-                    indexes[out_index] = max_i;
+                    if (indexes) indexes[out_index] = max_i;
                 }
             }
         }
@@ -2264,8 +2514,8 @@ void gemm_nn_bin_transposed_32bit_packed(int M, int N, int K, float ALPHA,
             float val = 0;
             for (s = 0; s < K; ++s) // l.size*l.size*l.c/32  or (l.size*l.size*l.c)
             {
-                register uint32_t A_PART = ((uint32_t*)A)[i*lda + s];
-                register uint32_t B_PART = ((uint32_t*)B)[j*ldb + s];
+                PUT_IN_REGISTER uint32_t A_PART = ((uint32_t*)A)[i*lda + s];
+                PUT_IN_REGISTER uint32_t B_PART = ((uint32_t*)B)[j * ldb + s];
                 uint32_t xnor_result = ~(A_PART ^ B_PART);
                 int32_t count = popcnt_32(xnor_result);  // must be Signed int
 
@@ -2284,7 +2534,7 @@ void convolution_repacked(uint32_t *packed_input, uint32_t *packed_weights, floa
     #pragma omp parallel for
     for (fil = 0; fil < n; ++fil) {
         float mean_val = mean_arr[fil];
-        int chan, c_pack, y, x, f_y, f_x;
+        int chan, y, x, f_y, f_x;   // c_pack
         // channel index
         for (chan = 0; chan < c / 32; ++chan)
             //for (chan = 0; chan < l.c; chan += 32)
@@ -2350,7 +2600,7 @@ void gemm_nt(int M, int N, int K, float ALPHA,
     int i,j,k;
     for(i = 0; i < M; ++i){
         for(j = 0; j < N; ++j){
-            register float sum = 0;
+            PUT_IN_REGISTER float sum = 0;
             for(k = 0; k < K; ++k){
                 sum += ALPHA*A[i*lda+k]*B[j*ldb + k];
             }
@@ -2367,7 +2617,7 @@ void gemm_tn(int M, int N, int K, float ALPHA,
     int i,j,k;
     for(i = 0; i < M; ++i){
         for(k = 0; k < K; ++k){
-            register float A_PART = ALPHA*A[k*lda+i];
+            PUT_IN_REGISTER float A_PART = ALPHA * A[k * lda + i];
             for(j = 0; j < N; ++j){
                 C[i*ldc+j] += A_PART*B[k*ldb+j];
             }
@@ -2383,7 +2633,7 @@ void gemm_tt(int M, int N, int K, float ALPHA,
     int i,j,k;
     for(i = 0; i < M; ++i){
         for(j = 0; j < N; ++j){
-            register float sum = 0;
+            PUT_IN_REGISTER float sum = 0;
             for(k = 0; k < K; ++k){
                 sum += ALPHA*A[i+k*lda]*B[k+j*ldb];
             }
@@ -2410,18 +2660,22 @@ void gemm_cpu(int TA, int TB, int M, int N, int K, float ALPHA,
     }
 
     is_avx();   // initialize static variable
-    is_fma_avx2();
-    int t;
-    #pragma omp parallel for
-    for (t = 0; t < M; ++t) {
-        if (!TA && !TB)
-            gemm_nn(1, N, K, ALPHA, A + t*lda, lda, B, ldb, C + t*ldc, ldc);
-        else if (TA && !TB)
-            gemm_tn(1, N, K, ALPHA, A + t, lda, B, ldb, C + t*ldc, ldc);
-        else if (!TA && TB)
-            gemm_nt(1, N, K, ALPHA, A + t*lda, lda, B, ldb, C + t*ldc, ldc);
-        else
-            gemm_tt(1, N, K, ALPHA, A + t, lda, B, ldb, C + t*ldc, ldc);
+    if (is_fma_avx2() && !TA && !TB) {
+        gemm_nn_fast(M, N, K, ALPHA, A, lda, B, ldb, C, ldc);
+    }
+    else {
+        int t;
+        #pragma omp parallel for
+        for (t = 0; t < M; ++t) {
+            if (!TA && !TB)
+                gemm_nn(1, N, K, ALPHA, A + t*lda, lda, B, ldb, C + t*ldc, ldc);
+            else if (TA && !TB)
+                gemm_tn(1, N, K, ALPHA, A + t, lda, B, ldb, C + t*ldc, ldc);
+            else if (!TA && TB)
+                gemm_nt(1, N, K, ALPHA, A + t*lda, lda, B, ldb, C + t*ldc, ldc);
+            else
+                gemm_tt(1, N, K, ALPHA, A + t, lda, B, ldb, C + t*ldc, ldc);
+        }
     }
 }
 
@@ -2436,10 +2690,11 @@ void gemm_ongpu(int TA, int TB, int M, int N, int K, float ALPHA,
         float *C_gpu, int ldc)
 {
     cublasHandle_t handle = blas_handle();
-    cudaError_t stream_status = cublasSetStream(handle, get_cuda_stream());
-    cudaError_t status = cublasSgemm(handle, (TB ? CUBLAS_OP_T : CUBLAS_OP_N),
+    cudaError_t stream_status = (cudaError_t)cublasSetStream(handle, get_cuda_stream());
+    CHECK_CUDA(stream_status);
+    cudaError_t status = (cudaError_t)cublasSgemm(handle, (TB ? CUBLAS_OP_T : CUBLAS_OP_N),
             (TA ? CUBLAS_OP_T : CUBLAS_OP_N), N, M, K, &ALPHA, B_gpu, ldb, A_gpu, lda, &BETA, C_gpu, ldc);
-    check_error(status);
+    CHECK_CUDA(status);
 }
 
 void gemm_gpu(int TA, int TB, int M, int N, int K, float ALPHA,
@@ -2601,3 +2856,9 @@ int test_gpu_blas()
 }
 #endif
 
+
+
+void init_cpu() {
+    is_avx();
+    is_fma_avx2();
+}

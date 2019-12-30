@@ -1,19 +1,35 @@
+#define _XOPEN_SOURCE
+#include "image.h"
 #include "http_stream.h"
 
-#ifdef OPENCV
 //
 // a single-threaded, multi client(using select), debug webserver - streaming out mjpg.
 //  on win, _WIN32 has to be defined, must link against ws2_32.lib (socks on linux are for free)
 //
 
+#include <cstdio>
+#include <vector>
+#include <iostream>
+#include <algorithm>
+#include <memory>
+#include <mutex>
+#include <ctime>
+using std::cerr;
+using std::endl;
+
 //
 // socket related abstractions:
 //
 #ifdef _WIN32
+#ifndef USE_CMAKE_LIBS
 #pragma comment(lib, "ws2_32.lib")
-#include <winsock.h>
+#endif
+#define WIN32_LEAN_AND_MEAN
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include <windows.h>
-#include <time.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include "gettimeofday.h"
 #define PORT        unsigned long
 #define ADDRPOINTER   int*
 struct _INIT_W32DATA
@@ -33,11 +49,12 @@ static int close_socket(SOCKET s) {
     free(buf);
     int close_input = ::shutdown(s, 0);
     int result = ::closesocket(s);
-    printf("Close socket: out = %d, in = %d \n", close_output, close_input);
+    cerr << "Close socket: out = " << close_output << ", in = " << close_input << " \n";
     return result;
 }
-#else   // nix
-#include <unistd.h>
+#else   // _WIN32 - else: nix
+#include "darkunistd.h"
+#include <fcntl.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -72,218 +89,18 @@ static int close_socket(SOCKET s) {
     free(buf);
     int close_input = ::shutdown(s, 0);
     int result = close(s);
-    printf("Close socket: out = %d, in = %d \n", close_output, close_input);
+    std::cerr << "Close socket: out = " << close_output << ", in = " << close_input << " \n";
     return result;
 }
 #endif // _WIN32
 
-#include <cstdio>
-#include <vector>
-#include <iostream>
-#include <algorithm>
-using std::cerr;
-using std::endl;
-
-#include "opencv2/opencv.hpp"
-#include "opencv2/highgui/highgui.hpp"
-#include "opencv2/highgui/highgui_c.h"
-#include "opencv2/imgproc/imgproc_c.h"
-#ifndef CV_VERSION_EPOCH
-#include "opencv2/videoio/videoio.hpp"
-#endif
-using namespace cv;
-
-#include "image.h"
-
-
-class MJPG_sender
-{
-    SOCKET sock;
-    SOCKET maxfd;
-    fd_set master;
-    int timeout; // master sock timeout, shutdown after timeout millis.
-    int quality; // jpeg compression [1..100]
-    int close_all_sockets;
-
-    int _write(int sock, char const*const s, int len)
-    {
-        if (len < 1) { len = strlen(s); }
-        return ::send(sock, s, len, 0);
-    }
-
-public:
-
-    MJPG_sender(int port = 0, int _timeout = 200000, int _quality = 30)
-        : sock(INVALID_SOCKET)
-        , timeout(_timeout)
-        , quality(_quality)
-    {
-        close_all_sockets = 0;
-        FD_ZERO(&master);
-        if (port)
-            open(port);
-    }
-
-    ~MJPG_sender()
-    {
-        close_all();
-        release();
-    }
-
-    bool release()
-    {
-        if (sock != INVALID_SOCKET)
-            ::shutdown(sock, 2);
-        sock = (INVALID_SOCKET);
-        return false;
-    }
-
-    void close_all()
-    {
-        close_all_sockets = 1;
-        cv::Mat tmp(cv::Size(10, 10), CV_8UC3);
-        write(tmp);
-    }
-
-    bool open(int port)
-    {
-        sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-
-        SOCKADDR_IN address;
-        address.sin_addr.s_addr = INADDR_ANY;
-        address.sin_family = AF_INET;
-        address.sin_port = htons(port);    // ::htons(port);
-        int reuse = 1;
-        if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
-            cerr << "setsockopt(SO_REUSEADDR) failed" << endl;
-
-#ifdef SO_REUSEPORT
-        if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0)
-            cerr << "setsockopt(SO_REUSEPORT) failed" << endl;
-#endif
-        if (::bind(sock, (SOCKADDR*)&address, sizeof(SOCKADDR_IN)) == SOCKET_ERROR)
-        {
-            cerr << "error MJPG_sender: couldn't bind sock " << sock << " to port " << port << "!" << endl;
-            return release();
-        }
-        if (::listen(sock, 10) == SOCKET_ERROR)
-        {
-            cerr << "error MJPG_sender: couldn't listen on sock " << sock << " on port " << port << " !" << endl;
-            return release();
-        }
-        FD_ZERO(&master);
-        FD_SET(sock, &master);
-        maxfd = sock;
-        return true;
-    }
-
-    bool isOpened()
-    {
-        return sock != INVALID_SOCKET;
-    }
-
-    bool write(const Mat & frame)
-    {
-        fd_set rread = master;
-        struct timeval select_timeout = { 0, 0 };
-        struct timeval socket_timeout = { 0, timeout };
-        if (::select(maxfd + 1, &rread, NULL, NULL, &select_timeout) <= 0)
-            return true; // nothing broken, there's just noone listening
-
-        std::vector<uchar> outbuf;
-        std::vector<int> params;
-        params.push_back(IMWRITE_JPEG_QUALITY);
-        params.push_back(quality);
-        cv::imencode(".jpg", frame, outbuf, params);
-        size_t outlen = outbuf.size();
-
-#ifdef _WIN32
-        for (unsigned i = 0; i<rread.fd_count; i++)
-        {
-            int addrlen = sizeof(SOCKADDR);
-            SOCKET s = rread.fd_array[i];    // fd_set on win is an array, while ...
-#else
-        for (int s = 0; s <= maxfd; s++)
-        {
-            socklen_t addrlen = sizeof(SOCKADDR);
-            if (!FD_ISSET(s, &rread))      // ... on linux it's a bitmask ;)
-                continue;
-#endif
-            if (s == sock) // request on master socket, accept and send main header.
-            {
-                SOCKADDR_IN address = { 0 };
-                SOCKET      client = ::accept(sock, (SOCKADDR*)&address, &addrlen);
-                if (client == SOCKET_ERROR)
-                {
-                    cerr << "error MJPG_sender: couldn't accept connection on sock " << sock << " !" << endl;
-                    return false;
-                }
-                if (setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (char *)&socket_timeout, sizeof(socket_timeout)) < 0) {
-                    cerr << "error MJPG_sender: SO_RCVTIMEO setsockopt failed\n";
-                }
-                if (setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, (char *)&socket_timeout, sizeof(socket_timeout)) < 0) {
-                    cerr << "error MJPG_sender: SO_SNDTIMEO setsockopt failed\n";
-                }
-                maxfd = (maxfd>client ? maxfd : client);
-                FD_SET(client, &master);
-                _write(client, "HTTP/1.0 200 OK\r\n", 0);
-                _write(client,
-                    "Server: Mozarella/2.2\r\n"
-                    "Accept-Range: bytes\r\n"
-                    "Connection: close\r\n"
-                    "Max-Age: 0\r\n"
-                    "Expires: 0\r\n"
-                    "Cache-Control: no-cache, private\r\n"
-                    "Pragma: no-cache\r\n"
-                    "Content-Type: multipart/x-mixed-replace; boundary=mjpegstream\r\n"
-                    "\r\n", 0);
-                cerr << "MJPG_sender: new client " << client << endl;
-            }
-            else // existing client, just stream pix
-            {
-                if (close_all_sockets) {
-                    int result = close_socket(s);
-                    printf("MJPG_sender: close clinet: %d \n", result);
-                    continue;
-                }
-
-                char head[400];
-                sprintf(head, "--mjpegstream\r\nContent-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n", outlen);
-                _write(s, head, 0);
-                int n = _write(s, (char*)(&outbuf[0]), outlen);
-                //cerr << "known client " << s << " " << n << endl;
-                if (n < outlen)
-                {
-                    cerr << "MJPG_sender: kill client " << s << endl;
-                    ::shutdown(s, 2);
-                    FD_CLR(s, &master);
-                }
-            }
-        }
-        if (close_all_sockets) {
-            int result = close_socket(sock);
-            printf("MJPG_sender: close acceptor: %d \n\n", result);
-        }
-        return true;
-    }
-};
-// ----------------------------------------
-
-void send_mjpeg(IplImage* ipl, int port, int timeout, int quality)
-{
-    static MJPG_sender wri(port, timeout, quality);
-    cv::Mat mat = cv::cvarrToMat(ipl);
-    wri.write(mat);
-    std::cout << " MJPEG-stream sent. \n";
-}
-// ----------------------------------------
 
 class JSON_sender
 {
     SOCKET sock;
     SOCKET maxfd;
     fd_set master;
-    int timeout; // master sock timeout, shutdown after timeout millis.
+    int timeout; // master sock timeout, shutdown after timeout usec.
     int close_all_sockets;
 
     int _write(int sock, char const*const s, int len)
@@ -294,7 +111,7 @@ class JSON_sender
 
 public:
 
-    JSON_sender(int port = 0, int _timeout = 200000)
+    JSON_sender(int port = 0, int _timeout = 400000)
         : sock(INVALID_SOCKET)
         , timeout(_timeout)
     {
@@ -336,6 +153,20 @@ public:
         if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
             cerr << "setsockopt(SO_REUSEADDR) failed" << endl;
 
+        // Non-blocking sockets
+        // Windows: ioctlsocket() and FIONBIO
+        // Linux: fcntl() and O_NONBLOCK
+#ifdef WIN32
+        unsigned long i_mode = 1;
+        int result = ioctlsocket(sock, FIONBIO, &i_mode);
+        if (result != NO_ERROR) {
+            std::cerr << "ioctlsocket(FIONBIO) failed with error: " << result << std::endl;
+        }
+#else // WIN32
+        int flags = fcntl(sock, F_GETFL, 0);
+        fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+#endif // WIN32
+
 #ifdef SO_REUSEPORT
         if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0)
             cerr << "setsockopt(SO_REUSEPORT) failed" << endl;
@@ -361,7 +192,7 @@ public:
         return sock != INVALID_SOCKET;
     }
 
-    bool write(char *outputbuf)
+    bool write(char const* outputbuf)
     {
         fd_set rread = master;
         struct timeval select_timeout = { 0, 0 };
@@ -369,7 +200,7 @@ public:
         if (::select(maxfd + 1, &rread, NULL, NULL, &select_timeout) <= 0)
             return true; // nothing broken, there's just noone listening
 
-        size_t outlen = strlen(outputbuf);
+        int outlen = static_cast<int>(strlen(outputbuf));
 
 #ifdef _WIN32
         for (unsigned i = 0; i<rread.fd_count; i++)
@@ -425,7 +256,7 @@ public:
                 //sprintf(head, "\r\nContent-Length: %zu\r\n\r\n", outlen);
                 //sprintf(head, "--boundary\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n", outlen);
                 //_write(s, head, 0);
-                if(!close_all_sockets) _write(s, ", \n", 0);
+                if (!close_all_sockets) _write(s, ", \n", 0);
                 int n = _write(s, outputbuf, outlen);
                 if (n < outlen)
                 {
@@ -436,164 +267,373 @@ public:
 
                 if (close_all_sockets) {
                     int result = close_socket(s);
-                    printf("JSON_sender: close clinet: %d \n", result);
+                    cerr << "JSON_sender: close clinet: " << result << " \n";
                     continue;
                 }
             }
         }
         if (close_all_sockets) {
             int result = close_socket(sock);
-            printf("JSON_sender: close acceptor: %d \n\n", result);
+            cerr << "JSON_sender: close acceptor: " << result << " \n\n";
+        }
+        return true;
+        }
+};
+// ----------------------------------------
+
+static std::unique_ptr<JSON_sender> js_ptr;
+static std::mutex mtx;
+
+void delete_json_sender()
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    js_ptr.release();
+}
+
+void send_json_custom(char const* send_buf, int port, int timeout)
+{
+    try {
+        std::lock_guard<std::mutex> lock(mtx);
+        if(!js_ptr) js_ptr.reset(new JSON_sender(port, timeout));
+
+        js_ptr->write(send_buf);
+    }
+    catch (...) {
+        cerr << " Error in send_json_custom() function \n";
+    }
+}
+
+void send_json(detection *dets, int nboxes, int classes, char **names, long long int frame_id, int port, int timeout)
+{
+    try {
+        char *send_buf = detection_to_json(dets, nboxes, classes, names, frame_id, NULL);
+
+        send_json_custom(send_buf, port, timeout);
+        std::cout << " JSON-stream sent. \n";
+
+        free(send_buf);
+    }
+    catch (...) {
+        cerr << " Error in send_json() function \n";
+    }
+}
+// ----------------------------------------
+
+
+#ifdef OPENCV
+
+#include <opencv2/opencv.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/highgui/highgui_c.h>
+#include <opencv2/imgproc/imgproc_c.h>
+#ifndef CV_VERSION_EPOCH
+#include <opencv2/videoio/videoio.hpp>
+#endif
+using namespace cv;
+
+
+
+class MJPG_sender
+{
+    SOCKET sock;
+    SOCKET maxfd;
+    fd_set master;
+    int timeout; // master sock timeout, shutdown after timeout usec.
+    int quality; // jpeg compression [1..100]
+    int close_all_sockets;
+
+    int _write(int sock, char const*const s, int len)
+    {
+        if (len < 1) { len = strlen(s); }
+        return ::send(sock, s, len, 0);
+    }
+
+public:
+
+    MJPG_sender(int port = 0, int _timeout = 400000, int _quality = 30)
+        : sock(INVALID_SOCKET)
+        , timeout(_timeout)
+        , quality(_quality)
+    {
+        close_all_sockets = 0;
+        FD_ZERO(&master);
+        if (port)
+            open(port);
+    }
+
+    ~MJPG_sender()
+    {
+        close_all();
+        release();
+    }
+
+    bool release()
+    {
+        if (sock != INVALID_SOCKET)
+            ::shutdown(sock, 2);
+        sock = (INVALID_SOCKET);
+        return false;
+    }
+
+    void close_all()
+    {
+        close_all_sockets = 1;
+        cv::Mat tmp(cv::Size(10, 10), CV_8UC3);
+        write(tmp);
+    }
+
+    bool open(int port)
+    {
+        sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+        SOCKADDR_IN address;
+        address.sin_addr.s_addr = INADDR_ANY;
+        address.sin_family = AF_INET;
+        address.sin_port = htons(port);    // ::htons(port);
+        int reuse = 1;
+        if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
+            cerr << "setsockopt(SO_REUSEADDR) failed" << endl;
+
+        // Non-blocking sockets
+        // Windows: ioctlsocket() and FIONBIO
+        // Linux: fcntl() and O_NONBLOCK
+#ifdef WIN32
+        unsigned long i_mode = 1;
+        int result = ioctlsocket(sock, FIONBIO, &i_mode);
+        if (result != NO_ERROR) {
+            std::cerr << "ioctlsocket(FIONBIO) failed with error: " << result << std::endl;
+        }
+#else // WIN32
+        int flags = fcntl(sock, F_GETFL, 0);
+        fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+#endif // WIN32
+
+#ifdef SO_REUSEPORT
+        if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0)
+            cerr << "setsockopt(SO_REUSEPORT) failed" << endl;
+#endif
+        if (::bind(sock, (SOCKADDR*)&address, sizeof(SOCKADDR_IN)) == SOCKET_ERROR)
+        {
+            cerr << "error MJPG_sender: couldn't bind sock " << sock << " to port " << port << "!" << endl;
+            return release();
+        }
+        if (::listen(sock, 10) == SOCKET_ERROR)
+        {
+            cerr << "error MJPG_sender: couldn't listen on sock " << sock << " on port " << port << " !" << endl;
+            return release();
+        }
+        FD_ZERO(&master);
+        FD_SET(sock, &master);
+        maxfd = sock;
+        return true;
+    }
+
+    bool isOpened()
+    {
+        return sock != INVALID_SOCKET;
+    }
+
+    bool write(const Mat & frame)
+    {
+        fd_set rread = master;
+        struct timeval select_timeout = { 0, 0 };
+        struct timeval socket_timeout = { 0, timeout };
+        if (::select(maxfd + 1, &rread, NULL, NULL, &select_timeout) <= 0)
+            return true; // nothing broken, there's just noone listening
+
+        std::vector<uchar> outbuf;
+        std::vector<int> params;
+        params.push_back(IMWRITE_JPEG_QUALITY);
+        params.push_back(quality);
+        cv::imencode(".jpg", frame, outbuf, params);  //REMOVED FOR COMPATIBILITY
+        // https://docs.opencv.org/3.4/d4/da8/group__imgcodecs.html#ga292d81be8d76901bff7988d18d2b42ac
+        //std::cerr << "cv::imencode call disabled!" << std::endl;
+        size_t outlen = outbuf.size();
+
+#ifdef _WIN32
+        for (unsigned i = 0; i<rread.fd_count; i++)
+        {
+            int addrlen = sizeof(SOCKADDR);
+            SOCKET s = rread.fd_array[i];    // fd_set on win is an array, while ...
+#else
+        for (int s = 0; s <= maxfd; s++)
+        {
+            socklen_t addrlen = sizeof(SOCKADDR);
+            if (!FD_ISSET(s, &rread))      // ... on linux it's a bitmask ;)
+                continue;
+#endif
+            if (s == sock) // request on master socket, accept and send main header.
+            {
+                SOCKADDR_IN address = { 0 };
+                SOCKET      client = ::accept(sock, (SOCKADDR*)&address, &addrlen);
+                if (client == SOCKET_ERROR)
+                {
+                    cerr << "error MJPG_sender: couldn't accept connection on sock " << sock << " !" << endl;
+                    return false;
+                }
+                if (setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (char *)&socket_timeout, sizeof(socket_timeout)) < 0) {
+                    cerr << "error MJPG_sender: SO_RCVTIMEO setsockopt failed\n";
+                }
+                if (setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, (char *)&socket_timeout, sizeof(socket_timeout)) < 0) {
+                    cerr << "error MJPG_sender: SO_SNDTIMEO setsockopt failed\n";
+                }
+                maxfd = (maxfd>client ? maxfd : client);
+                FD_SET(client, &master);
+                _write(client, "HTTP/1.0 200 OK\r\n", 0);
+                _write(client,
+                    "Server: Mozarella/2.2\r\n"
+                    "Accept-Range: bytes\r\n"
+                    "Connection: close\r\n"
+                    "Max-Age: 0\r\n"
+                    "Expires: 0\r\n"
+                    "Cache-Control: no-cache, private\r\n"
+                    "Pragma: no-cache\r\n"
+                    "Content-Type: multipart/x-mixed-replace; boundary=mjpegstream\r\n"
+                    "\r\n", 0);
+                cerr << "MJPG_sender: new client " << client << endl;
+            }
+            else // existing client, just stream pix
+            {
+                if (close_all_sockets) {
+                    int result = close_socket(s);
+                    cerr << "MJPG_sender: close clinet: " << result << " \n";
+                    continue;
+                }
+
+                char head[400];
+                sprintf(head, "--mjpegstream\r\nContent-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n", outlen);
+                _write(s, head, 0);
+                int n = _write(s, (char*)(&outbuf[0]), outlen);
+                //cerr << "known client " << s << " " << n << endl;
+                if (n < outlen)
+                {
+                    cerr << "MJPG_sender: kill client " << s << endl;
+                    ::shutdown(s, 2);
+                    FD_CLR(s, &master);
+                }
+            }
+        }
+        if (close_all_sockets) {
+            int result = close_socket(sock);
+            cerr << "MJPG_sender: close acceptor: " << result << " \n\n";
         }
         return true;
     }
 };
 // ----------------------------------------
 
-void send_json(detection *dets, int nboxes, int classes, char **names, long long int frame_id, int port, int timeout)
+static std::mutex mtx_mjpeg;
+
+//struct mat_cv : cv::Mat { int a[0]; };
+
+void send_mjpeg(mat_cv* mat, int port, int timeout, int quality)
 {
-    static JSON_sender js(port, timeout);
-    char *send_buf = detection_to_json(dets, nboxes, classes, names, frame_id, NULL);
-
-    js.write(send_buf);
-    std::cout << " JSON-stream sent. \n";
-    free(send_buf);
-}
-
-// ----------------------------------------
-
-CvCapture* get_capture_video_stream(char *path) {
-    CvCapture* cap = NULL;
     try {
-        cap = (CvCapture*)new cv::VideoCapture(path);
+        std::lock_guard<std::mutex> lock(mtx_mjpeg);
+        static MJPG_sender wri(port, timeout, quality);
+        //cv::Mat mat = cv::cvarrToMat(ipl);
+        wri.write(*(cv::Mat*)mat);
+        std::cout << " MJPEG-stream sent. \n";
     }
     catch (...) {
-        std::cout << " Error: video-stream " << path << " can't be opened! \n";
+        cerr << " Error in send_mjpeg() function \n";
     }
-    return cap;
 }
 // ----------------------------------------
 
-CvCapture* get_capture_webcam(int index) {
-    CvCapture* cap = NULL;
-    try {
-        cap = (CvCapture*)new cv::VideoCapture(index);
-        //((cv::VideoCapture*)cap)->set(CV_CAP_PROP_FRAME_WIDTH, 1280);
-        //((cv::VideoCapture*)cap)->set(CV_CAP_PROP_FRAME_HEIGHT, 960);
-    }
-    catch (...) {
-        std::cout << " Error: Web-camera " << index << " can't be opened! \n";
-    }
-    return cap;
+std::string get_system_frame_time_string()
+{
+    std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lock(mtx);
+    struct tm *tmp_buf = localtime(&t);
+    char buff[256];
+    std::strftime(buff, 256, "%A %F %T", tmp_buf);
+    std::string system_frame_time = buff;
+    return system_frame_time;
 }
 // ----------------------------------------
 
-IplImage* get_webcam_frame(CvCapture *cap) {
-    IplImage* src = NULL;
-    try {
-        cv::VideoCapture &cpp_cap = *(cv::VideoCapture *)cap;
-        cv::Mat frame;
-        if (cpp_cap.isOpened())
-        {
-            cpp_cap >> frame;
-            IplImage tmp = frame;
-            src = cvCloneImage(&tmp);
-        }
-        else {
-            std::cout << " Video-stream stoped! \n";
-        }
-    }
-    catch (...) {
-        std::cout << " Video-stream stoped! \n";
-    }
-    return src;
-}
 
-int get_stream_fps_cpp(CvCapture *cap) {
-    int fps = 25;
-    try {
-        cv::VideoCapture &cpp_cap = *(cv::VideoCapture *)cap;
-#ifndef CV_VERSION_EPOCH    // OpenCV 3.x
-        fps = cpp_cap.get(CAP_PROP_FPS);
-#else                        // OpenCV 2.x
-        fps = cpp_cap.get(CV_CAP_PROP_FPS);
+#ifdef __CYGWIN__
+int send_http_post_request(char *http_post_host, int server_port, const char *videosource,
+    detection *dets, int nboxes, int classes, char **names, long long int frame_id, int ext_output, int timeout)
+{
+    std::cerr << " send_http_post_request() isn't implemented \n";
+    return 0;
+}
+#else   //  __CYGWIN__
+
+#ifndef   NI_MAXHOST
+#define   NI_MAXHOST 1025
 #endif
-    }
-    catch (...) {
-        std::cout << " Can't get FPS of source videofile. For output video FPS = 25 by default. \n";
-    }
-    return fps;
-}
-// ----------------------------------------
-extern "C" {
-    image ipl_to_image(IplImage* src);    // image.c
-}
 
-image image_data_augmentation(IplImage* ipl, int w, int h,
-    int pleft, int ptop, int swidth, int sheight, int flip,
-    float jitter, float dhue, float dsat, float dexp)
+#ifndef   NI_NUMERICHOST
+#define NI_NUMERICHOST  0x02
+#endif
+
+//#define CPPHTTPLIB_OPENSSL_SUPPORT
+#include "httplib.h"
+
+// https://webhook.site/
+// https://github.com/yhirose/cpp-httplib
+// sent POST http request
+int send_http_post_request(char *http_post_host, int server_port, const char *videosource,
+    detection *dets, int nboxes, int classes, char **names, long long int frame_id, int ext_output, int timeout)
 {
-    cv::Mat img = cv::cvarrToMat(ipl);
+    const float thresh = 0.005; // function get_network_boxes() has already filtred dets by actual threshold
 
-    // crop
-    cv::Rect src_rect(pleft, ptop, swidth, sheight);
-    cv::Rect img_rect(cv::Point2i(0, 0), img.size());
-    cv::Rect new_src_rect = src_rect & img_rect;
+    std::string message;
 
-    cv::Rect dst_rect(cv::Point2i(std::max<int>(0, -pleft), std::max<int>(0, -ptop)), new_src_rect.size());
-
-    cv::Mat cropped(cv::Size(src_rect.width, src_rect.height), img.type());
-    cropped.setTo(cv::Scalar::all(0));
-
-    img(new_src_rect).copyTo(cropped(dst_rect));
-
-    // resize
-    cv::Mat sized;
-    cv::resize(cropped, sized, cv::Size(w, h), 0, 0, INTER_LINEAR);
-
-    // flip
-    if (flip) {
-        cv::flip(sized, cropped, 1);    // 0 - x-axis, 1 - y-axis, -1 - both axes (x & y)
-        sized = cropped.clone();
+    for (int i = 0; i < nboxes; ++i) {
+        char labelstr[4096] = { 0 };
+        int class_id = -1;
+        for (int j = 0; j < classes; ++j) {
+            int show = strncmp(names[j], "dont_show", 9);
+            if (dets[i].prob[j] > thresh && show) {
+                if (class_id < 0) {
+                    strcat(labelstr, names[j]);
+                    class_id = j;
+                    char buff[10];
+                    sprintf(buff, " (%2.0f%%)", dets[i].prob[j] * 100);
+                    strcat(labelstr, buff);
+                }
+                else {
+                    strcat(labelstr, ", ");
+                    strcat(labelstr, names[j]);
+                }
+                printf("%s: %.0f%% ", names[j], dets[i].prob[j] * 100);
+            }
+        }
+        if (class_id >= 0) {
+            message += std::string(names[class_id]) + std::string(", id: ") + std::to_string(class_id) + "\n";
+        }
     }
 
-    // HSV augmentation
-    // CV_BGR2HSV, CV_RGB2HSV, CV_HSV2BGR, CV_HSV2RGB
-    if (ipl->nChannels >= 3)
+    if (!message.empty())
     {
-        cv::Mat hsv_src;
-        cvtColor(sized, hsv_src, CV_BGR2HSV);    // also BGR -> RGB
+        std::string time = get_system_frame_time_string();
+        message += "\ntime:\n" + time + "\n";
+        message += "videosource:\n" + std::string(videosource);
 
-        std::vector<cv::Mat> hsv;
-        cv::split(hsv_src, hsv);
+        std::string http_post_host_str = http_post_host;
+        int slash_index = http_post_host_str.find("/");
 
-        hsv[1] *= dsat;
-        hsv[2] *= dexp;
-        hsv[0] += 179 * dhue;
+        std::string http_path = http_post_host_str.substr(slash_index, http_post_host_str.length() - slash_index);
+        http_post_host_str = http_post_host_str.substr(0, slash_index);
 
-        cv::merge(hsv, hsv_src);
+        // send HTTP-Post request
+        httplib::Client cli(http_post_host_str.c_str(), server_port, timeout);
+        auto res = cli.Post(http_path.c_str(), message, "text/plain");
 
-        cvtColor(hsv_src, sized, CV_HSV2RGB);    // now RGB instead of BGR
-    }
-    else
-    {
-        sized *= dexp;
+        return 1;
     }
 
-    //std::stringstream window_name;
-    //window_name << "augmentation - " << ipl;
-    //cv::imshow(window_name.str(), sized);
-    //cv::waitKey(0);
-
-    // Mat -> IplImage -> image
-    IplImage src = sized;
-    image out = ipl_to_image(&src);
-
-    return out;
+    return 0;
 }
+#endif   //  __CYGWIN__
 
-
-#endif    // OPENCV
+#endif      // OPENCV
 
 // -----------------------------------------------------
 
